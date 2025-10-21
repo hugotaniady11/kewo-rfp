@@ -1,35 +1,71 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
+import { supabase } from "@/lib/db";
 
 const excludePaths = ["/signin", "/signup", "/reset-password"];
 
-interface AuthLayoutProps {
-  children: React.ReactNode;
-}
-
-export default function AuthLayout({ children }: AuthLayoutProps) {
+export default function AuthWrapper({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [isReady, setIsReady] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const auth = localStorage.getItem("auth");
+    // Ensure client-side render before calling Supabase
+    setHydrated(true);
+  }, []);
 
-    // Only check auth for non-excluded routes
-    if (!excludePaths.includes(pathname)) {
-      if (auth !== "true") {
-        router.replace("/signin");
-        return;
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const checkSession = async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
+        const session = data?.session;
+        const isLoggedIn = !!session;
+
+        // Only check for protected pages
+        if (!excludePaths.includes(pathname)) {
+          if (!isLoggedIn) {
+            setIsAuthenticated(false);
+            router.replace("/signin");
+            return;
+          }
+        }
+
+        setIsAuthenticated(true);
+      } catch (err) {
+        console.error("Error checking Supabase session:", err);
+        setIsAuthenticated(false);
       }
-    }
+    };
 
-    setIsReady(true);
-  }, [pathname, router]);
+    checkSession();
 
-  if (!isReady) {
-    // show loading screen while checking auth
+    // Re-check when auth state changes (login/logout)
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session && !excludePaths.includes(pathname)) {
+        setIsAuthenticated(false);
+        router.replace("/signin");
+      } else {
+        setIsAuthenticated(true);
+      }
+    });
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, [hydrated, pathname, router]);
+
+  // Wait until hydration complete
+  if (!hydrated) return null;
+
+  // Show “Checking session” only when first verifying
+  if (isAuthenticated === null) {
     return (
       <div className="flex min-h-screen items-center justify-center text-gray-600">
         Checking session...
