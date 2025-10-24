@@ -39,6 +39,10 @@ export default function HomePage() {
     router.push("/proposal-checker");
   };
 
+  const goToBidAnalysis = () => {
+    router.push("/bid-analysis");
+  };
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50">
       <h1 className="text-3xl font-bold text-gray-800">
@@ -46,11 +50,18 @@ export default function HomePage() {
       </h1>
 
       {/* 🟢 New button */}
-      <button
+      {/* <button
         onClick={goToProposalChecker}
         className="mt-6 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
       >
         Go to Proposal Checker
+      </button> */}
+
+      <button
+        onClick={goToBidAnalysis}
+        className="mt-6 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+      >
+        Go to Bid Analysis
       </button>
 
       <button
