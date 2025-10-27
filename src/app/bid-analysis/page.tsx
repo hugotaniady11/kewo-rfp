@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/db";
 import { useGoNoGoPolling } from "@/hooks/goNoGoPooling";
+import React from "react";
 
 interface WebhookConfig {
   id: string;
@@ -247,6 +248,47 @@ export default function BidAnalysisPage() {
     }, 4000);
   };
 
+  function RenderObject({ data }: { data: any }) {
+    if (!data || typeof data !== "object") return null;
+
+    return (
+      <div className="space-y-3">
+        {Object.entries(data).map(([key, value]) => (
+          <div key={key}>
+            <p className="font-semibold text-gray-900 mb-1 capitalize">
+              {key.replace(/_/g, " ")}
+            </p>
+
+            {Array.isArray(value) ? (
+              <div className="space-y-2 pl-3 border-l border-gray-200">
+                {value.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-gray-50 p-2 rounded-md text-gray-800 space-y-1"
+                  >
+                    {typeof item === "object" ? (
+                      <RenderObject data={item} />
+                    ) : (
+                      <p>{String(item)}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : typeof value === "object" ? (
+              <div className="pl-3 border-l border-gray-200">
+                <RenderObject data={value} />
+              </div>
+            ) : (
+              <p className="bg-gray-50 p-2 rounded-md text-gray-800 whitespace-pre-wrap">
+                {String(value)}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-10">
       <div className="mx-auto max-w-5xl rounded-xl bg-white p-8 shadow-md">
@@ -295,11 +337,10 @@ export default function BidAnalysisPage() {
             {WEBHOOK_CONFIGS.map((flow) => (
               <label
                 key={flow.id}
-                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${
-                  selectedFlows.includes(flow.id)
+                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${selectedFlows.includes(flow.id)
                     ? "border-blue-600 bg-blue-50"
                     : "border-gray-200 hover:border-gray-400"
-                }`}
+                  }`}
               >
                 <input
                   type="checkbox"
@@ -345,9 +386,8 @@ export default function BidAnalysisPage() {
           <button
             onClick={handleStart}
             disabled={isRunning}
-            className={`rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 transition ${
-              isRunning ? "opacity-70 cursor-not-allowed" : ""
-            }`}
+            className={`rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 transition ${isRunning ? "opacity-70 cursor-not-allowed" : ""
+              }`}
           >
             {isRunning ? "Processing..." : "Start Analysis"}
           </button>
@@ -380,23 +420,56 @@ export default function BidAnalysisPage() {
             <h3 className="font-semibold text-gray-800 mb-4">
               📊 Real-time Analysis Results
             </h3>
-            <div className="space-y-4">
-              {results.map((r, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg border border-gray-200 p-4 bg-gray-50"
-                >
-                  <p className="font-semibold text-blue-700">{r.agentName}</p>
-                  <p className="text-xs text-gray-500 mb-2">
-                    Completed at {new Date(r.completedAt).toLocaleTimeString()}
-                  </p>
-                  <pre className="text-sm text-gray-800 whitespace-pre-wrap">
-                    {typeof r.result === "string"
-                      ? r.result.substring(0, 500)
-                      : JSON.stringify(r.result, null, 2)}
-                  </pre>
-                </div>
-              ))}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {results.map((r, i) => {
+                return (
+                  <div
+                    key={i}
+                    className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm"
+                  >
+                    {/* Header */}
+                    <div className="flex justify-between items-center mb-1">
+                      <h4 className="text-lg font-semibold text-blue-700">
+                        🤖 {r.agent_name || r.agentName}
+                      </h4>
+                      <span className="text-xs text-gray-500">
+                        ⏱ {r.processing_time ?? r.processingTime ?? 0}s
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Completed at{" "}
+                      {new Date(r.updated_at || r.completedAt).toLocaleTimeString()}
+                    </p>
+
+                    {/* Output */}
+                    <div className="text-sm text-gray-800 space-y-3">
+                      {(() => {
+                        let output =
+                          typeof r.result === "string"
+                            ? r.result
+                            : r.result?.output || r.result;
+
+                        // 🧩 Parse stringified JSON if needed
+                        if (typeof output === "string") {
+                          try {
+                            const parsed = JSON.parse(output);
+                            if (typeof parsed === "object") output = parsed;
+                          } catch {
+                            // leave as-is
+                          }
+                        }
+
+                        return typeof output === "object" ? (
+                          <RenderObject data={output} />
+                        ) : (
+                          <p className="whitespace-pre-wrap">{String(output)}</p>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
