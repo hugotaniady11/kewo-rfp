@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/db";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function HomePage() {
   const router = useRouter();
@@ -35,41 +36,55 @@ export default function HomePage() {
     router.replace("/signin");
   };
 
-  const goToProposalChecker = () => {
-    router.push("/proposal-checker");
-  };
-
-  const goToBidAnalysis = () => {
-    router.push("/bid-analysis");
-  };
-
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50">
-      <h1 className="text-3xl font-bold text-gray-800">
-        Hello, {name || "Loading..."} 👋
-      </h1>
+    <div className="min-h-screen bg-gray-50 text-gray-800">
+      {/* Header */}
+      <header className="flex items-center justify-between bg-white px-6 py-4 shadow-sm">
+        <h1 className="text-xl font-semibold tracking-tight">Project Dashboard</h1>
 
-      {/* 🟢 New button */}
-      {/* <button
-        onClick={goToProposalChecker}
-        className="mt-6 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-      >
-        Go to Proposal Checker
-      </button> */}
+        <nav className="flex items-center space-x-6 text-sm font-medium">
+          <Link href="/" className="hover:text-blue-600">
+            Home
+          </Link>
+          <Link href="/bid-analysis" className="hover:text-blue-600">
+            Bid Analysis
+          </Link>
+          <Link href="/history" className="hover:text-blue-600">
+            History
+          </Link>
 
-      <button
-        onClick={goToBidAnalysis}
-        className="mt-6 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-      >
-        Go to Bid Analysis
-      </button>
+          <span className="text-gray-500">|</span>
+          <span className="text-gray-700">{name ? `Hi, ${name}` : "..."}</span>
 
-      <button
-        onClick={handleLogout}
-        className="mt-3 rounded bg-red-600 px-4 py-2 text-white hover:bg-red-700"
-      >
-        Logout
-      </button>
+          <button
+            onClick={handleLogout}
+            className="rounded bg-red-600 px-3 py-1 text-white text-sm hover:bg-red-700"
+          >
+            Logout
+          </button>
+        </nav>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex flex-col items-center justify-center py-24">
+        <h2 className="text-3xl font-bold mb-2">Welcome back 👋</h2>
+        <p className="text-gray-600 mb-8">Choose a tool to continue.</p>
+
+        <div className="flex space-x-4">
+          <Link
+            href="/bid-analysis"
+            className="rounded bg-blue-600 px-5 py-3 text-white hover:bg-blue-700 transition"
+          >
+            Go to Bid Analysis
+          </Link>
+          <Link
+            href="/history"
+            className="rounded bg-gray-700 px-5 py-3 text-white hover:bg-gray-800 transition"
+          >
+            View Upload History
+          </Link>
+        </div>
+      </main>
     </div>
   );
 }

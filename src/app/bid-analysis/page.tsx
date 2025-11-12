@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/db";
 import { useGoNoGoPolling } from "@/hooks/goNoGoPooling";
 import React from "react";
+import { convertToPdf } from "@/lib/cloudconvert";
+import { extractPdfText } from "@/utils/pdfText";
 
 interface WebhookConfig {
   id: string;
@@ -56,11 +58,15 @@ export default function BidAnalysisPage() {
   // --- Proposal Maker States ---
   const [proposalVisible, setProposalVisible] = useState(false);
   const [requirements, setRequirements] = useState<ProposalRequirement[]>([]);
-  const [uploadedFiles, setUploadedFiles] = useState<Map<string, File>>(
-    new Map()
-  );
+  // const [uploadedFiles, setUploadedFiles] = useState<Map<string, File>>(
+  //   new Map()
+  // );
   const [proposalResult, setProposalResult] = useState<any | null>(null);
   const [isProposalProcessing, setIsProposalProcessing] = useState(false);
+
+  const [proposalFiles, setProposalFiles] = useState<Record<string, { file: File; text: string }>>({});
+  const [converting, setConverting] = useState<Record<string, boolean>>({});
+
 
   // 🔁 Polling Hook
   useGoNoGoPolling({
@@ -170,52 +176,136 @@ export default function BidAnalysisPage() {
   };
 
   // 📂 Handle Upload
-  const handleFileChange = (reqId: string, file: File | null) => {
-    setUploadedFiles((prev) => {
-      const map = new Map(prev);
-      if (file) map.set(reqId, file);
-      else map.delete(reqId);
-      return map;
-    });
+  const handleFileChange = async (id: string, file: File | null) => {
+    if (!file) return;
+
+    console.log("🔥 File selected:", file.name);
+
+    try {
+      // 1️⃣ Extract text from the file
+      const text = await extractPdfText(file);
+      console.log("✅ Extracted text length:", text.length);
+
+      // 2️⃣ Get logged-in user
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const userId = session?.user.id;
+
+      if (!userId) {
+        alert("⚠️ Please log in first!");
+        return;
+      }
+
+      console.log("👤 Logged in user:", userId);
+
+      // 3️⃣ Upload file to Supabase Storage
+      const filePath = `${userId}/${Date.now()}-${file.name}`;
+      console.log("📤 Uploading to:", filePath);
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("documents")
+        .upload(filePath, file);
+
+      if (uploadError) {
+        console.error("❌ Upload failed:", uploadError);
+        alert(`Upload failed: ${uploadError.message}`);
+        return;
+      }
+
+      console.log("✅ File uploaded successfully:", uploadData);
+
+      // 4️⃣ Insert record in Supabase table
+      const { data: insertData, error: insertError } = await supabase
+        .from("uploaded_files")
+        .insert([
+          {
+            user_id: userId,
+            file_name: file.name,
+            file_path: filePath,
+            text_content: text,
+          },
+        ]);
+
+      if (insertError) {
+        console.error("❌ Database insert failed:", insertError);
+        alert(`Database insert failed: ${insertError.message}`);
+        return;
+      }
+
+      console.log("✅ Database record inserted successfully:", insertData);
+
+      // 5️⃣ Update local state (so preview works)
+      setProposalFiles((prev) => ({
+        ...prev,
+        [id]: { file, text },
+      }));
+
+      console.log("🎉 File fully processed and preview updated:", file.name);
+    } catch (err) {
+      console.error("⚠️ handleFileChange error:", err);
+      alert("Something went wrong during file upload.");
+    }
   };
+
+
+
 
   // 📤 Submit to Proposal Maker Webhook
   const handleSubmitProposal = async () => {
-    if (uploadedFiles.size === 0) {
-      alert("Please upload at least one document.");
-      return;
-    }
+    try {
+      // 🧩 Ensure at least one document is uploaded
+      if (Object.keys(proposalFiles).length === 0) {
+        alert("Please upload at least one document.");
+        return;
+      }
 
-    setIsProposalProcessing(true);
-    setStatusText("⏳ Uploading documents to Proposal Maker...");
+      setIsProposalProcessing(true);
+      setStatusText("⏳ Uploading documents to Proposal Maker...");
 
-    const formData = new FormData();
-    formData.append("sessionId", sessionId ?? "");
-    formData.append("folderNumber", String(folderNumber));
-    formData.append("timestamp", new Date().toISOString());
-    formData.append("userAgent", navigator.userAgent);
+      // ✅ Create form data safely
+      const formData = new FormData();
+      formData.append("sessionId", sessionId ?? "");
+      formData.append("folderNumber", String(folderNumber));
+      formData.append("timestamp", new Date().toISOString());
+      formData.append("userAgent", navigator.userAgent);
 
-    uploadedFiles.forEach((file, id) => {
-      formData.append(id, file, file.name);
-    });
+      // ✅ Append each file and extracted text
+      Object.entries(proposalFiles).forEach(([id, { file, text }]) => {
+        console.log(`📄 Adding ${file.name} and its extracted text to FormData`);
+        formData.append(id, file, file.name); // the PDF file
+        formData.append(`${id}_text`, text || ""); // the extracted text
+      });
 
-    const res = await fetch(PROPOSAL_MAKER_WEBHOOK_URL, {
-      method: "POST",
-      body: formData,
-    });
+      console.log("📦 Submitting form data to webhook:", PROPOSAL_MAKER_WEBHOOK_URL);
 
-    if (!res.ok) {
-      alert("Failed to start proposal maker workflow.");
+      // ✅ Send to your n8n webhook
+      const res = await fetch(PROPOSAL_MAKER_WEBHOOK_URL, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        console.error("❌ Proposal Maker API response:", res.status, res.statusText);
+        alert("Failed to start proposal maker workflow.");
+        setIsProposalProcessing(false);
+        return;
+      }
+
+      console.log("✅ Proposal Maker request sent successfully!");
+
+      setStatusText("🔄 Waiting for proposal draft to be generated...");
+      setTimeout(() => {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+      }, 500);
+
+      // ✅ Poll for the generated proposal document
+      pollProposalResult(sessionId!);
+    } catch (err) {
+      console.error("❌ handleSubmitProposal failed:", err);
+      alert("Error submitting proposal documents.");
       setIsProposalProcessing(false);
-      return;
     }
-
-    setStatusText("🔄 Waiting for proposal draft to be generated...");
-    setTimeout(() => {
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-    }, 500);
-
-    pollProposalResult(sessionId!);
   };
 
   // 🔁 Poll Supabase Proposal Documents
@@ -338,8 +428,8 @@ export default function BidAnalysisPage() {
               <label
                 key={flow.id}
                 className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${selectedFlows.includes(flow.id)
-                    ? "border-blue-600 bg-blue-50"
-                    : "border-gray-200 hover:border-gray-400"
+                  ? "border-blue-600 bg-blue-50"
+                  : "border-gray-200 hover:border-gray-400"
                   }`}
               >
                 <input
@@ -548,7 +638,7 @@ export default function BidAnalysisPage() {
               📄 Upload Proposal Documents
             </h3>
             {requirements.map((req) => (
-              <div key={req.id} className="mb-4">
+              <div key={req.id} className="mb-5">
                 <label className="block font-medium text-gray-700 mb-1">
                   {req.name}{" "}
                   {req.required ? (
@@ -557,9 +647,8 @@ export default function BidAnalysisPage() {
                     <span className="text-gray-400">(Optional)</span>
                   )}
                 </label>
-                <p className="text-sm text-gray-500 mb-2">
-                  {req.description}
-                </p>
+                <p className="text-sm text-gray-500 mb-2">{req.description}</p>
+
                 <input
                   type="file"
                   accept=".pdf,.doc,.docx,.txt"
@@ -568,6 +657,15 @@ export default function BidAnalysisPage() {
                   }
                   className="block w-full rounded border border-gray-300 p-2"
                 />
+
+                {proposalFiles[req.id]?.text && (
+                  <div className="mt-2 text-xs bg-white p-3 border rounded shadow-sm max-h-40 overflow-y-auto">
+                    <p className="font-medium text-gray-800 mb-1">Preview:</p>
+                    <p className="text-gray-600 whitespace-pre-wrap">
+                      {proposalFiles[req.id]?.text.slice(0, 500)}...
+                    </p>
+                  </div>
+                )}
               </div>
             ))}
             <div className="flex justify-end mt-6">
@@ -609,6 +707,84 @@ export default function BidAnalysisPage() {
           </div>
         )}
       </div>
+
+      <div className="mb-6 border border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
+        <h4 className="font-semibold mb-2 text-gray-700">🧪 Quick PDF Extract & Upload Test</h4>
+        <input
+          type="file"
+          accept="application/pdf"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            console.log("🔥 File selected:", file.name);
+            console.log("📄 File object type:", file.constructor.name);
+            console.log("📄 File instanceof File:", file instanceof File);
+
+            try {
+              // 1️⃣ Extract text
+              const text = await extractPdfText(file);
+              console.log("✅ Extracted text length:", text.length);
+
+              // 2️⃣ Get logged-in user
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+              const userId = session?.user.id;
+              if (!userId) {
+                alert("⚠️ Please log in first!");
+                return;
+              }
+              console.log("👤 Logged in user:", userId);
+
+              // 3️⃣ Upload to Supabase Storage
+              const filePath = `${userId}/${Date.now()}-${file.name}`;
+              console.log("📤 Uploading to:", filePath);
+
+              const { data: uploadData, error: uploadError } = await supabase.storage.from("documents").upload(filePath, file);
+
+              if (uploadError) {
+                console.error("❌ Upload failed:", uploadError);
+                alert(`Upload failed: ${uploadError.message}`);
+                return;
+              }
+
+              console.log("✅ File uploaded successfully:", uploadData);
+
+              // 4️⃣ Insert record in Supabase table
+              const insertPayload = [
+                {
+                  user_id: userId,
+                  file_name: file.name,
+                  file_path: filePath,
+                  text_content: text,
+                },
+              ];
+
+              console.log("🧾 Insert payload:", insertPayload);
+
+              const { data: insertData, error: insertError } = await supabase
+                .from("uploaded_files")
+                .insert(insertPayload);
+
+              if (insertError) {
+                console.error("❌ Database insert failed:", insertError);
+                alert(`Database insert failed: ${insertError.message}`);
+                return;
+              }
+
+              console.log("✅ Database record inserted successfully:", insertData);
+              alert(`✅ Uploaded & saved successfully!\n\nFile: ${file.name}\nText length: ${text.length}`);
+            } catch (err) {
+              console.error("⚠️ Test upload error:", err);
+              alert("Something went wrong. Check console logs.");
+            }
+          }}
+        />
+      </div>
+
+
     </div>
+
   );
 }
