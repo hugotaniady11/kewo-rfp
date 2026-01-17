@@ -3,9 +3,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/db";
 import { useGoNoGoPolling } from "@/hooks/goNoGoPooling";
-import React from "react";
-import { convertToPdf } from "@/lib/cloudconvert";
-import { extractPdfText } from "@/utils/pdfText";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 interface WebhookConfig {
   id: string;
@@ -25,24 +24,10 @@ const WEBHOOK_CONFIGS: WebhookConfig[] = [
   },
 ];
 
-const PROPOSAL_CHECKER_WEBHOOK_URL =
-  "https://kewo.app.n8n.cloud/webhook/proposal-checker";
-const PROPOSAL_MAKER_WEBHOOK_URL =
-  "https://kewo.app.n8n.cloud/webhook/proposal-maker";
-
 const LLM_MODELS = [
-  { id: "gpt-4.1-mini", name: "ChatGPT 4.1 Mini" },
-  { id: "grok-3-mini", name: "Grok 3 Mini" },
-  { id: "gpt-5-mini", name: "ChatGPT 5 Mini" },
+  { id: "gpt-4.1-mini", name: "Extract text + Merge all agent" },
+  { id: "grok-3-mini", name: "Merge all agent" },
 ];
-
-interface ProposalRequirement {
-  id: string;
-  name: string;
-  description: string;
-  required: boolean;
-  fieldName: string;
-}
 
 export default function BidAnalysisPage() {
   const [folderNumber, setFolderNumber] = useState(1);
@@ -54,19 +39,7 @@ export default function BidAnalysisPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [documentData, setDocumentData] = useState<any | null>(null);
-
-  // --- Proposal Maker States ---
-  const [proposalVisible, setProposalVisible] = useState(false);
-  const [requirements, setRequirements] = useState<ProposalRequirement[]>([]);
-  // const [uploadedFiles, setUploadedFiles] = useState<Map<string, File>>(
-  //   new Map()
-  // );
-  const [proposalResult, setProposalResult] = useState<any | null>(null);
-  const [isProposalProcessing, setIsProposalProcessing] = useState(false);
-
-  const [proposalFiles, setProposalFiles] = useState<Record<string, { file: File; text: string }>>({});
-  const [converting, setConverting] = useState<Record<string, boolean>>({});
-
+  const router = useRouter();
 
   // 🔁 Polling Hook
   useGoNoGoPolling({
@@ -81,7 +54,6 @@ export default function BidAnalysisPage() {
       setProgress(100);
       setStatusText("✅ Analysis completed successfully!");
       setIsRunning(false);
-      setProposalVisible(true);
     },
   });
 
@@ -93,17 +65,12 @@ export default function BidAnalysisPage() {
       return;
     }
 
-    const newSessionId = `sess-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .substring(2, 9)}`;
+    const newSessionId = `webapp-sess-${Math.random().toString(36).substring(2, 9)}`;
     setSessionId(newSessionId);
     setProgress(10);
     setStatusText("Initializing workflows...");
     setIsRunning(true);
     setResults([]);
-    setDocumentData(null);
-    setProposalVisible(false);
-    setProposalResult(null);
 
     try {
       for (const flowId of selectedFlows) {
@@ -140,202 +107,11 @@ export default function BidAnalysisPage() {
     setProgress(0);
     setStatusText("Ready to start analysis...");
     setIsRunning(false);
-    setProposalVisible(false);
-    setProposalResult(null);
   };
 
-  // 🧠 Step 1 — Request Proposal Requirements
-  const handleStartProposalMaker = async () => {
-    if (!sessionId) return alert("Session not found");
-    setStatusText("🔍 Checking proposal requirements...");
-    try {
-      const res = await fetch(PROPOSAL_CHECKER_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setRequirements(data.data.requirements);
-        setProposalVisible(true);
-        setStatusText("✅ Upload your proposal documents below.");
-        setTimeout(() => {
-          window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-        }, 500);
-      } else {
-        alert("Failed to load proposal requirements.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Failed to connect to proposal checker webhook.");
-    }
-  };
-
-  // 📂 Handle Upload
-  const handleFileChange = async (id: string, file: File | null) => {
-    if (!file) return;
-
-    console.log("🔥 File selected:", file.name);
-
-    try {
-      // 1️⃣ Extract text from the file
-      const text = await extractPdfText(file);
-      console.log("✅ Extracted text length:", text.length);
-
-      // 2️⃣ Get logged-in user
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const userId = session?.user.id;
-
-      if (!userId) {
-        alert("⚠️ Please log in first!");
-        return;
-      }
-
-      console.log("👤 Logged in user:", userId);
-
-      // 3️⃣ Upload file to Supabase Storage
-      const filePath = `${userId}/${Date.now()}-${file.name}`;
-      console.log("📤 Uploading to:", filePath);
-
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("documents")
-        .upload(filePath, file);
-
-      if (uploadError) {
-        console.error("❌ Upload failed:", uploadError);
-        alert(`Upload failed: ${uploadError.message}`);
-        return;
-      }
-
-      console.log("✅ File uploaded successfully:", uploadData);
-
-      // 4️⃣ Insert record in Supabase table
-      const { data: insertData, error: insertError } = await supabase
-        .from("uploaded_files")
-        .insert([
-          {
-            user_id: userId,
-            file_name: file.name,
-            file_path: filePath,
-            text_content: text,
-          },
-        ]);
-
-      if (insertError) {
-        console.error("❌ Database insert failed:", insertError);
-        alert(`Database insert failed: ${insertError.message}`);
-        return;
-      }
-
-      console.log("✅ Database record inserted successfully:", insertData);
-
-      // 5️⃣ Update local state (so preview works)
-      setProposalFiles((prev) => ({
-        ...prev,
-        [id]: { file, text },
-      }));
-
-      console.log("🎉 File fully processed and preview updated:", file.name);
-    } catch (err) {
-      console.error("⚠️ handleFileChange error:", err);
-      alert("Something went wrong during file upload.");
-    }
-  };
-
-
-
-
-  // 📤 Submit to Proposal Maker Webhook
-  const handleSubmitProposal = async () => {
-    try {
-      // 🧩 Ensure at least one document is uploaded
-      if (Object.keys(proposalFiles).length === 0) {
-        alert("Please upload at least one document.");
-        return;
-      }
-
-      setIsProposalProcessing(true);
-      setStatusText("⏳ Uploading documents to Proposal Maker...");
-
-      // ✅ Create form data safely
-      const formData = new FormData();
-      formData.append("sessionId", sessionId ?? "");
-      formData.append("folderNumber", String(folderNumber));
-      formData.append("timestamp", new Date().toISOString());
-      formData.append("userAgent", navigator.userAgent);
-
-      // ✅ Append each file and extracted text
-      Object.entries(proposalFiles).forEach(([id, { file, text }]) => {
-        console.log(`📄 Adding ${file.name} and its extracted text to FormData`);
-        formData.append(id, file, file.name); // the PDF file
-        formData.append(`${id}_text`, text || ""); // the extracted text
-      });
-
-      console.log("📦 Submitting form data to webhook:", PROPOSAL_MAKER_WEBHOOK_URL);
-
-      // ✅ Send to your n8n webhook
-      const res = await fetch(PROPOSAL_MAKER_WEBHOOK_URL, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        console.error("❌ Proposal Maker API response:", res.status, res.statusText);
-        alert("Failed to start proposal maker workflow.");
-        setIsProposalProcessing(false);
-        return;
-      }
-
-      console.log("✅ Proposal Maker request sent successfully!");
-
-      setStatusText("🔄 Waiting for proposal draft to be generated...");
-      setTimeout(() => {
-        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-      }, 500);
-
-      // ✅ Poll for the generated proposal document
-      pollProposalResult(sessionId!);
-    } catch (err) {
-      console.error("❌ handleSubmitProposal failed:", err);
-      alert("Error submitting proposal documents.");
-      setIsProposalProcessing(false);
-    }
-  };
-
-  // 🔁 Poll Supabase Proposal Documents
-  const pollProposalResult = async (sid: string) => {
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      attempts++;
-      const { data } = await supabase
-        .from("proposal_documents")
-        .select("*")
-        .eq("session_id", sid)
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      if (data && data.length > 0 && data[0].status === "completed") {
-        clearInterval(interval);
-        setIsProposalProcessing(false);
-        setProposalResult(data[0]);
-        setStatusText("✅ Proposal draft ready!");
-        setTimeout(() => {
-          window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-        }, 400);
-      }
-
-      if (attempts >= 120) {
-        clearInterval(interval);
-        setIsProposalProcessing(false);
-        alert("Timeout: Proposal taking too long.");
-      }
-    }, 4000);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace("/signin");
   };
 
   function RenderObject({ data }: { data: any }) {
@@ -380,145 +156,172 @@ export default function BidAnalysisPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-6 py-10">
-      <div className="mx-auto max-w-5xl rounded-xl bg-white p-8 shadow-md">
-        {/* Header */}
-        <div className="mb-6 text-center">
-          <h2 className="text-2xl font-bold text-gray-800">
-            Kewo RFP Analysis Enhanced
-          </h2>
-          <p className="text-gray-500">
-            Select folder number, workflow, and LLM to generate Go/No-Go
-            reports.
-          </p>
-        </div>
+    <div className="min-h-screen bg-gray-50 text-gray-800">
+      {/* Header */}
+      <header className="flex items-center justify-between bg-white px-6 py-4 shadow-sm">
+        <h1 className="text-xl font-semibold tracking-tight">Project Dashboard</h1>
 
-        {/* Folder Selector */}
-        <div className="mb-8">
-          <label className="block font-medium text-gray-700 mb-2">
-            📁 Folder Number
-          </label>
-          <div className="flex items-center gap-4">
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={folderNumber}
-              onChange={(e) => setFolderNumber(Number(e.target.value))}
-              className="w-20 rounded border border-gray-300 px-2 py-1 text-center"
-            />
-            <input
-              type="range"
-              min={1}
-              max={20}
-              value={folderNumber}
-              onChange={(e) => setFolderNumber(Number(e.target.value))}
-              className="flex-1 accent-blue-600"
-            />
-          </div>
-        </div>
+        <nav className="flex items-center space-x-6 text-sm font-medium">
+          <Link href="/" className="hover:text-blue-600">
+            Home
+          </Link>
+          <Link href="/bid-analysis" className="hover:text-blue-600">
+            Phase 1 / Bid Analysis
+          </Link>
+          <Link href="/proposal-checker" className="hover:text-blue-600">
+            Phase 2 / Proposal Checker
+          </Link>
+          <Link href="/proposal-maker" className="hover:text-blue-600">
+            Phase 3 / Proposal Maker
+          </Link>
+          <Link href="/history" className="hover:text-blue-600">
+            History
+          </Link>
 
-        {/* Workflow Selection */}
-        <div className="mb-8">
-          <h3 className="font-semibold text-gray-800 mb-3">
-            🔄 Select Analysis Workflows
-          </h3>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {WEBHOOK_CONFIGS.map((flow) => (
-              <label
-                key={flow.id}
-                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${selectedFlows.includes(flow.id)
-                  ? "border-blue-600 bg-blue-50"
-                  : "border-gray-200 hover:border-gray-400"
-                  }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedFlows.includes(flow.id)}
-                  onChange={(e) => {
-                    if (e.target.checked)
-                      setSelectedFlows((prev) => [...prev, flow.id]);
-                    else
-                      setSelectedFlows((prev) =>
-                        prev.filter((id) => id !== flow.id)
-                      );
-                  }}
-                />
-                <div>
-                  <p className="font-semibold text-gray-800">{flow.name}</p>
-                  <p className="text-sm text-gray-500">{flow.description}</p>
-                </div>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {/* LLM Selection */}
-        <div className="mb-8 text-center">
-          <h3 className="font-semibold text-gray-800 mb-2">
-            🤖 Select AI Language Model
-          </h3>
-          <select
-            value={selectedLLM}
-            onChange={(e) => setSelectedLLM(e.target.value)}
-            className="w-64 border border-gray-300 rounded-lg px-3 py-2 text-gray-700 text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            {LLM_MODELS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Start & Reset Buttons */}
-        <div className="flex justify-center gap-4 mb-8">
           <button
-            onClick={handleStart}
-            disabled={isRunning}
-            className={`rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 transition ${isRunning ? "opacity-70 cursor-not-allowed" : ""
-              }`}
+            onClick={handleLogout}
+            className="rounded bg-red-600 px-3 py-1 text-white text-sm hover:bg-red-700"
           >
-            {isRunning ? "Processing..." : "Start Analysis"}
+            Logout
           </button>
-          <button
-            onClick={handleReset}
-            className="rounded bg-gray-200 px-5 py-2 hover:bg-gray-300"
-          >
-            Reset
-          </button>
-        </div>
-
-        {/* Progress */}
-        <div className="mb-6">
-          <div className="flex justify-between text-sm text-gray-500 mb-1">
-            <span>Overall Progress</span>
-            <span>{progress.toFixed(0)}%</span>
+        </nav>
+      </header>
+      <div className="min-h-screen bg-gray-50 px-6 py-10">
+        <div className="mx-auto max-w-5xl rounded-xl bg-white p-8 shadow-md">
+          {/* Header */}
+          <div className="mb-6 text-center">
+            <h2 className="text-2xl font-bold text-gray-800">
+              Kewo RFP Analysis Enhanced
+            </h2>
+            <p className="text-gray-500">
+              Select folder number, workflow, and LLM to generate Go/No-Go reports.
+            </p>
           </div>
-          <div className="h-3 w-full bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className="h-3 bg-blue-600 transition-all"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <p className="text-sm text-gray-600 mt-2">{statusText}</p>
-        </div>
 
-        {/* Live Results */}
-        {results.length > 0 && (
-          <div className="mt-8">
-            <h3 className="font-semibold text-gray-800 mb-4">
-              📊 Real-time Analysis Results
+          {/* Folder Selector */}
+          <div className="mb-8">
+            <label className="block font-medium text-gray-700 mb-2">
+              📁 Folder Number
+            </label>
+            <div className="flex items-center gap-4">
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={folderNumber}
+                onChange={(e) => setFolderNumber(Number(e.target.value))}
+                className="w-20 rounded border border-gray-300 px-2 py-1 text-center"
+              />
+              <input
+                type="range"
+                min={1}
+                max={20}
+                value={folderNumber}
+                onChange={(e) => setFolderNumber(Number(e.target.value))}
+                className="flex-1 accent-blue-600"
+              />
+            </div>
+          </div>
+
+          {/* Workflow Selection */}
+          <div className="mb-8">
+            <h3 className="font-semibold text-gray-800 mb-3">
+              🔄 Select Analysis Workflows
             </h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {WEBHOOK_CONFIGS.map((flow) => (
+                <label
+                  key={flow.id}
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${selectedFlows.includes(flow.id)
+                    ? "border-blue-600 bg-blue-50"
+                    : "border-gray-200 hover:border-gray-400"
+                    }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedFlows.includes(flow.id)}
+                    onChange={(e) => {
+                      if (e.target.checked)
+                        setSelectedFlows((prev) => [...prev, flow.id]);
+                      else
+                        setSelectedFlows((prev) =>
+                          prev.filter((id) => id !== flow.id)
+                        );
+                    }}
+                  />
+                  <div>
+                    <p className="font-semibold text-gray-800">{flow.name}</p>
+                    <p className="text-sm text-gray-500">{flow.description}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {results.map((r, i) => {
-                return (
+          {/* LLM Selection */}
+          <div className="mb-8 text-center">
+            <h3 className="font-semibold text-gray-800 mb-2">
+              🤖 Select AI Language Model
+            </h3>
+            <select
+              value={selectedLLM}
+              onChange={(e) => setSelectedLLM(e.target.value)}
+              className="w-64 border border-gray-300 rounded-lg px-3 py-2 text-gray-700 text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {LLM_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Start & Reset Buttons */}
+          <div className="flex justify-center gap-4 mb-8">
+            <button
+              onClick={handleStart}
+              disabled={isRunning}
+              className={`rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 transition ${isRunning ? "opacity-70 cursor-not-allowed" : ""
+                }`}
+            >
+              {isRunning ? "Processing..." : "Start Analysis"}
+            </button>
+            <button
+              onClick={handleReset}
+              className="rounded bg-gray-200 px-5 py-2 hover:bg-gray-300"
+            >
+              Reset
+            </button>
+          </div>
+
+          {/* Progress */}
+          <div className="mb-6">
+            <div className="flex justify-between text-sm text-gray-500 mb-1">
+              <span>Overall Progress</span>
+              <span>{progress.toFixed(0)}%</span>
+            </div>
+            <div className="h-3 w-full bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-3 bg-blue-600 transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-sm text-gray-600 mt-2">{statusText}</p>
+          </div>
+
+          {/* Live Results */}
+          {results.length > 0 && (
+            <div className="mt-8">
+              <h3 className="font-semibold text-gray-800 mb-4">
+                📊 Real-time Analysis Results
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {results.map((r, i) => (
                   <div
                     key={i}
                     className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm"
                   >
-                    {/* Header */}
                     <div className="flex justify-between items-center mb-1">
                       <h4 className="text-lg font-semibold text-blue-700">
                         🤖 {r.agent_name || r.agentName}
@@ -532,7 +335,6 @@ export default function BidAnalysisPage() {
                       {new Date(r.updated_at || r.completedAt).toLocaleTimeString()}
                     </p>
 
-                    {/* Output */}
                     <div className="text-sm text-gray-800 space-y-3">
                       {(() => {
                         let output =
@@ -540,7 +342,6 @@ export default function BidAnalysisPage() {
                             ? r.result
                             : r.result?.output || r.result;
 
-                        // 🧩 Parse stringified JSON if needed
                         if (typeof output === "string") {
                           try {
                             const parsed = JSON.parse(output);
@@ -558,233 +359,53 @@ export default function BidAnalysisPage() {
                       })()}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Final Document */}
-        {documentData && (
-          <div className="mt-10 bg-green-50 border border-green-300 p-6 rounded-lg text-center">
-            <h3 className="text-lg font-bold text-green-700 mb-2">
-              ✅ Analysis Complete
-            </h3>
-            <p className="text-gray-600 mb-4">
-              {documentData.documentName || "RFP Proposal"}
-            </p>
-            <div className="flex justify-center gap-4">
-              {documentData.documentUrl && (
-                <a
-                  href={documentData.documentUrl}
-                  target="_blank"
-                  className="rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700"
-                >
-                  📖 Open Document
-                </a>
-              )}
-              {documentData.docId && (
-                <a
-                  href={`https://docs.google.com/document/d/${documentData.docId}/export?format=pdf`}
-                  target="_blank"
-                  className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-                >
-                  📥 Download PDF
-                </a>
-              )}
-            </div>
-
-            {/* Proposal Maker Trigger */}
-            <div className="mt-6">
-              <button
-                onClick={handleStartProposalMaker}
-                className="rounded bg-orange-500 px-6 py-2 text-white hover:bg-orange-600"
-              >
-                📝 Draft Proposal Maker
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Proposal Loading State */}
-        {isProposalProcessing && !proposalResult && (
-          <div className="mt-10">
-            <div className="max-w-xl mx-auto bg-white p-10 rounded-2xl shadow-lg text-center border border-blue-100">
-              <div className="relative w-12 h-12 mb-6 mx-auto">
-                <div className="absolute inset-0 border-4 border-blue-300 rounded-full opacity-30"></div>
-                <div className="absolute inset-0 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                ))}
               </div>
-              <h3 className="text-xl font-bold text-blue-800 mb-3">
-                ⏳ Generating Your Proposal
+            </div>
+          )}
+
+          {/* Final Document */}
+          {documentData && (
+            <div className="mt-10 bg-green-50 border border-green-300 p-6 rounded-lg text-center">
+              <h3 className="text-lg font-bold text-green-700 mb-2">
+                ✅ Analysis Complete
               </h3>
               <p className="text-gray-600 mb-4">
-                AI is creating your draft proposal based on the Go/No-Go
-                analysis.
-                <br />
-                <strong>This process typically takes 3–5 minutes.</strong>
+                {documentData.documentName || "RFP Proposal"}
               </p>
-              <div className="bg-blue-50 text-blue-700 p-3 rounded-lg text-sm">
-                💡 <strong>Tip:</strong> Please keep this page open — don’t
-                refresh or close it.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Proposal Upload Form */}
-        {proposalVisible && requirements.length > 0 && !isProposalProcessing && (
-          <div className="mt-10 border border-gray-200 rounded-lg p-6 bg-gray-50">
-            <h3 className="text-lg font-bold text-gray-800 mb-4">
-              📄 Upload Proposal Documents
-            </h3>
-            {requirements.map((req) => (
-              <div key={req.id} className="mb-5">
-                <label className="block font-medium text-gray-700 mb-1">
-                  {req.name}{" "}
-                  {req.required ? (
-                    <span className="text-red-500">*</span>
-                  ) : (
-                    <span className="text-gray-400">(Optional)</span>
-                  )}
-                </label>
-                <p className="text-sm text-gray-500 mb-2">{req.description}</p>
-
-                <input
-                  type="file"
-                  accept=".pdf,.doc,.docx,.txt"
-                  onChange={(e) =>
-                    handleFileChange(req.id, e.target.files?.[0] ?? null)
-                  }
-                  className="block w-full rounded border border-gray-300 p-2"
-                />
-
-                {proposalFiles[req.id]?.text && (
-                  <div className="mt-2 text-xs bg-white p-3 border rounded shadow-sm max-h-40 overflow-y-auto">
-                    <p className="font-medium text-gray-800 mb-1">Preview:</p>
-                    <p className="text-gray-600 whitespace-pre-wrap">
-                      {proposalFiles[req.id]?.text.slice(0, 500)}...
-                    </p>
-                  </div>
+              <div className="flex justify-center gap-4 mb-6">
+                {documentData.documentUrl && (
+                  <a
+                    href={documentData.documentUrl}
+                    target="_blank"
+                    className="rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700"
+                  >
+                    📖 Open Document
+                  </a>
+                )}
+                {documentData.docId && (
+                  <a
+                    href={`https://docs.google.com/document/d/${documentData.docId}/export?format=pdf`}
+                    target="_blank"
+                    className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+                  >
+                    📥 Download PDF
+                  </a>
                 )}
               </div>
-            ))}
-            <div className="flex justify-end mt-6">
-              <button
-                onClick={handleSubmitProposal}
-                className="rounded bg-blue-600 px-5 py-2 text-white hover:bg-blue-700"
-              >
-                Submit Documents
-              </button>
+
+              <div>
+                <button
+                  onClick={() => window.open("/proposal-checker", "_blank")}
+                  className="rounded bg-orange-500 px-6 py-2 text-white hover:bg-orange-600"
+                >
+                  📝 Draft Proposal Maker
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-
-        {/* Proposal Result */}
-        {proposalResult && (
-          <div className="mt-10 text-center bg-green-50 border border-green-300 rounded-lg p-8">
-            <h3 className="text-xl font-bold text-green-800 mb-2">
-              ✅ Proposal Successfully Created!
-            </h3>
-            <p className="text-gray-600 mb-4">
-              {proposalResult.document_name || "RFP Draft Proposal"}
-            </p>
-            <div className="flex justify-center gap-4">
-              <a
-                href={proposalResult.document_url}
-                target="_blank"
-                className="rounded bg-green-600 px-4 py-2 text-white hover:bg-green-700"
-              >
-                📖 Open Proposal
-              </a>
-              <a
-                href={`https://docs.google.com/document/d/${proposalResult.document_id}/export?format=pdf`}
-                target="_blank"
-                className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-              >
-                📥 Download PDF
-              </a>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-
-      <div className="mb-6 border border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
-        <h4 className="font-semibold mb-2 text-gray-700">🧪 Quick PDF Extract & Upload Test</h4>
-        <input
-          type="file"
-          accept="application/pdf"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-
-            console.log("🔥 File selected:", file.name);
-            console.log("📄 File object type:", file.constructor.name);
-            console.log("📄 File instanceof File:", file instanceof File);
-
-            try {
-              // 1️⃣ Extract text
-              const text = await extractPdfText(file);
-              console.log("✅ Extracted text length:", text.length);
-
-              // 2️⃣ Get logged-in user
-              const {
-                data: { session },
-              } = await supabase.auth.getSession();
-              const userId = session?.user.id;
-              if (!userId) {
-                alert("⚠️ Please log in first!");
-                return;
-              }
-              console.log("👤 Logged in user:", userId);
-
-              // 3️⃣ Upload to Supabase Storage
-              const filePath = `${userId}/${Date.now()}-${file.name}`;
-              console.log("📤 Uploading to:", filePath);
-
-              const { data: uploadData, error: uploadError } = await supabase.storage.from("documents").upload(filePath, file);
-
-              if (uploadError) {
-                console.error("❌ Upload failed:", uploadError);
-                alert(`Upload failed: ${uploadError.message}`);
-                return;
-              }
-
-              console.log("✅ File uploaded successfully:", uploadData);
-
-              // 4️⃣ Insert record in Supabase table
-              const insertPayload = [
-                {
-                  user_id: userId,
-                  file_name: file.name,
-                  file_path: filePath,
-                  text_content: text,
-                },
-              ];
-
-              console.log("🧾 Insert payload:", insertPayload);
-
-              const { data: insertData, error: insertError } = await supabase
-                .from("uploaded_files")
-                .insert(insertPayload);
-
-              if (insertError) {
-                console.error("❌ Database insert failed:", insertError);
-                alert(`Database insert failed: ${insertError.message}`);
-                return;
-              }
-
-              console.log("✅ Database record inserted successfully:", insertData);
-              alert(`✅ Uploaded & saved successfully!\n\nFile: ${file.name}\nText length: ${text.length}`);
-            } catch (err) {
-              console.error("⚠️ Test upload error:", err);
-              alert("Something went wrong. Check console logs.");
-            }
-          }}
-        />
-      </div>
-
-
     </div>
-
   );
 }

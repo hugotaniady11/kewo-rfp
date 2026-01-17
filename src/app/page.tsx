@@ -47,7 +47,13 @@ export default function HomePage() {
             Home
           </Link>
           <Link href="/bid-analysis" className="hover:text-blue-600">
-            Bid Analysis
+            Phase 1 / Bid Analysis
+          </Link>
+          <Link href="/proposal-checker" className="hover:text-blue-600">
+            Phase 2 / Proposal Checker
+          </Link>
+          <Link href="/proposal-maker" className="hover:text-blue-600">
+            Phase 3 / Proposal Maker
           </Link>
           <Link href="/history" className="hover:text-blue-600">
             History
