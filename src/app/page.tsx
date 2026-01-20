@@ -52,9 +52,9 @@ export default function HomePage() {
           <Link href="/proposal-checker" className="hover:text-blue-600">
             Phase 2 / Proposal Checker
           </Link>
-          <Link href="/proposal-maker" className="hover:text-blue-600">
+          {/* <Link href="/proposal-maker" className="hover:text-blue-600">
             Phase 3 / Proposal Maker
-          </Link>
+          </Link> */}
           <Link href="/history" className="hover:text-blue-600">
             History
           </Link>
@@ -84,10 +84,10 @@ export default function HomePage() {
             Go to Bid Analysis
           </Link>
           <Link
-            href="/history"
+            href="/proposal-checker"
             className="rounded bg-gray-700 px-5 py-3 text-white hover:bg-gray-800 transition"
           >
-            View Upload History
+            Go to Proposal Checker
           </Link>
         </div>
       </main>

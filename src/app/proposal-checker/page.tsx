@@ -262,9 +262,9 @@ export default function ProposalCheckerPage() {
           <Link href="/proposal-checker" className="hover:text-blue-600">
             Phase 2 / Proposal Checker
           </Link>
-          <Link href="/proposal-maker" className="hover:text-blue-600">
+          {/* <Link href="/proposal-maker" className="hover:text-blue-600">
             Phase 3 / Proposal Maker
-          </Link>
+          </Link> */}
           <Link href="/history" className="hover:text-blue-600">
             History
           </Link>
