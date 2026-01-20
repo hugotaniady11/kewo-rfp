@@ -60,6 +60,15 @@ export default function ProposalCheckerPage() {
   const [fileStatuses, setFileStatuses] = useState<Record<string, string>>({});
   const [readyCount, setReadyCount] = useState(0);
 
+  //phase-3 state
+  const [submitting, setSubmitting] = useState(false);
+  const [apiResult, setApiResult] = useState<{
+    docId: string;
+    documentName: string;
+    documentUrl: string;
+    pdfUrl: string;
+  } | null>(null);
+
   // -------- load table data --------
   useEffect(() => {
     fetchAllData();
@@ -167,30 +176,65 @@ export default function ProposalCheckerPage() {
 
   //Phase 3
   const handleSubmit = async () => {
-    const formData = new FormData();
+    if (!selectedSession) {
+      alert("Please select a session first.");
+      return;
+    }
 
-    Object.entries(files).forEach(([reqId, file]) => {
-      if (file) {
-        formData.append(`proposal-doc-${reqId}`, file);
+    setSubmitting(true);
+    setApiResult(null);
+
+    // Build extract_document array
+    const extract_document = [];
+
+    for (const req of requirements) {
+      const file = files[req.id];
+      if (!file) continue;
+
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      let resultText = "";
+
+      if (isPdf) {
+        resultText = await extractPdfText(file); // Your utility ✅
+      } else {
+        resultText = `Unsupported file type: ${file.name}`;
       }
-    });
+
+      extract_document.push({
+        title: req.name,
+        result: resultText,
+      });
+    }
+
+    const payload = {
+      sessionId: selectedSession.session_id,
+      folderNumber: String(selectedSession.folder_number),
+      extract_document,
+    };
 
     try {
-      const res = await fetch("/api/proposal-checker", {
+      const res = await fetch("https://kewo.app.n8n.cloud/webhook/proposal-maker", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
-      if (res.ok) {
-        const result = await res.json();
-        alert("✅ Proposal submitted successfully!");
-        console.log("Result:", result);
-        handleCancel(); // reset form
-      } else {
-        alert("❌ Submission failed");
+      const responseData = await res.json(); // Now safe - returns JSON
+      console.log("✅ API Response:", responseData);
+
+      if (!res.ok) {
+        alert(`❌ Error ${res.status}: ${JSON.stringify(responseData)}`);
+        return;
       }
-    } catch (error) {
-      alert("❌ Error submitting proposal");
+
+      // Store result for buttons
+      setApiResult(responseData);
+      alert("✅ Proposal generated!");
+    } catch (error: any) {
+      console.error("❌ Phase 3 error:", error);
+      alert("❌ Network error: " + error.message);
+    } finally {
+      setLoading(false); // Reset loading
     }
   };
 
@@ -551,16 +595,44 @@ export default function ProposalCheckerPage() {
                 </button>
                 <button
                   onClick={handleSubmit}
-                  disabled={!isSubmitReady}
-                  className={`px-8 py-3 rounded-xl text-lg font-semibold shadow-lg transition-all flex-1 sm:flex-none ${isSubmitReady
-                    ? "bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 hover:shadow-xl hover:scale-[1.02]"
-                    : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    }`}
+                  disabled={!isSubmitReady || submitting || !!apiResult}
+                  className={`px-8 py-3 rounded-xl text-lg font-semibold shadow-lg transition-all flex-1 sm:flex-none ... ${submitting ? "opacity-75 cursor-wait" : ""}`}
                 >
-                  ✅ Submit {requirements.length} Documents
+                  {submitting
+                    ? "⏳ Extracting PDFs..."
+                    : `✅ Submit ${requirements.length} Documents`
+                  }
                 </button>
               </div>
             </div>
+
+            {/* Success buttons - show after API response */}
+            {apiResult && (
+              <div className="p-6 border-t bg-gradient-to-r from-green-50 to-emerald-50">
+                <h4 className="font-bold text-lg mb-4 text-green-800 flex items-center gap-2">
+                  ✅ Proposal Generated: {apiResult.documentName}
+                </h4>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <a
+                    href={apiResult.documentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 bg-white border-2 border-green-300 hover:border-green-400 text-green-800 px-6 py-3 rounded-xl font-semibold hover:shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
+                  >
+                    📝 Open Document
+                  </a>
+                  <a
+                    href={apiResult.pdfUrl}
+                    target="_blank"
+                    download={apiResult.documentName + ".pdf"}
+                    className="flex-1 bg-gradient-to-r from-emerald-500 to-green-600 text-white px-6 py-3 rounded-xl font-semibold hover:from-emerald-600 hover:to-green-700 shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
+                  >
+                    ⬇️ Download PDF
+                  </a>
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       </div>
