@@ -6,6 +6,8 @@ import { supabase } from "@/lib/db";
 import Link from "next/link";
 import router from "next/router";
 import { extractText } from "unpdf";
+import * as pdfjsLib from 'pdfjs-dist';
+import { createWorker } from 'tesseract.js';
 
 type ProposalRequirement = {
   id: string;
@@ -166,13 +168,54 @@ export default function ProposalCheckerPage() {
   };
 
   // --- PDF text extraction using unpdf ---
-  const extractPdfText = async (file: File) => {
-    const buffer = await file.arrayBuffer();
-    const result = await extractText(buffer);
-    const text =
-      Array.isArray(result.text) ? result.text.join(" ") : result.text || "";
-    return text;
+  const extractHybridPdfText = async (file: File): Promise<string> => {
+    try {
+      // STEP 1: Try unpdf (your code, fast)
+      const buffer = await file.arrayBuffer();
+      const unpdfResult = await extractText(buffer) as { text: string[] | string };
+      let text = Array.isArray(unpdfResult.text)
+        ? unpdfResult.text.join(" ").trim()
+        : unpdfResult.text?.trim() || "";
+
+      if (text.length > 100) {
+        return text.slice(0, 5000); // Native text ✅
+      }
+
+      // STEP 2: OCR fallback (image PDF)
+      console.log('🔄 OCR: ' + file.name);
+
+      // pdf.js render → Tesseract OCR (page 1 only, fast)
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+      const pdf = await pdfjsLib.getDocument(buffer).promise;
+      const page = await pdf.getPage(1);
+
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      const ctx = canvas.getContext('2d') as CanvasRenderingContext2D; // ✅ Fixed
+      if (ctx) {
+        await page.render({
+          canvasContext: ctx,
+          viewport
+        }).promise;
+      }
+
+
+      const worker = await createWorker('eng');
+      const { data: { text: ocrText } } = await worker.recognize(canvas);
+      await worker.terminate();
+
+      return (ocrText || '').trim().slice(0, 5000) || '⚠️ OCR failed';
+
+    } catch (err) {
+      console.error('Extraction failed:', err);
+      return `ERROR_${file.name}`;
+    }
   };
+
+
 
   //Phase 3
   const handleSubmit = async () => {
@@ -185,24 +228,58 @@ export default function ProposalCheckerPage() {
     setApiResult(null);
 
     // Build extract_document array
-    const extract_document = [];
+    const extract_document: { title: string; result: string }[] = [];
 
     for (const req of requirements) {
       const file = files[req.id];
-      if (!file) continue;
-
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      let resultText = "";
-
-      if (isPdf) {
-        resultText = await extractPdfText(file); // Your utility ✅
-      } else {
-        resultText = `Unsupported file type: ${file.name}`;
+      if (!file) {
+        if (req.required) {
+          // required but missing → block submit
+          alert(`Required file missing: ${req.name}`);
+          throw new Error(`Missing required file ${req.name}`);
+        }
+        continue; // optional and not uploaded
       }
+
+      setFileStatuses(prev => ({
+        ...prev,
+        [req.id]: `Uploading & extracting: ${file.name}...`,
+      }));
+
+      // 1) Call per-file extract API (FormData)
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const extractRes = await fetch(
+        "https://kewo.app.n8n.cloud/webhook/ocr-test",
+        {
+          method: "POST",
+          body: formData, // do NOT set Content-Type
+        }
+      );
+      console.log(extractRes)
+
+      if (!extractRes.ok) {
+        const txt = await extractRes.text();
+        console.error(`❌ Extract failed for ${req.name}:`, txt);
+        setFileStatuses(prev => ({
+          ...prev,
+          [req.id]: `❌ Extract failed (${extractRes.status})`,
+        }));
+        throw new Error(`Extract API error ${extractRes.status}`);
+      }
+
+      const extractJson: { fullText: string }[] = await extractRes.json();
+      const fullText = extractJson[0]?.fullText || "";
+
+      setFileStatuses(prev => ({
+        ...prev,
+        [req.id]: `✅ Extracted: ${file.name}`,
+      }));
 
       extract_document.push({
         title: req.name,
-        result: resultText,
+        result: fullText,
       });
     }
 
@@ -211,6 +288,8 @@ export default function ProposalCheckerPage() {
       folderNumber: String(selectedSession.folder_number),
       extract_document,
     };
+
+    console.log(payload)
 
     try {
       const res = await fetch("https://kewo.app.n8n.cloud/webhook/proposal-maker", {
