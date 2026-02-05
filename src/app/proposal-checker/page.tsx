@@ -594,17 +594,10 @@ export default function ProposalCheckerPage() {
                     </div>
 
                     {/* Description - Better spacing */}
-                    <div className="space-y-3 mb-6 text-sm leading-relaxed">
-                      {Object.entries(req.description).map(([key, value]) => (
-                        <div key={key} className="group/desc flex gap-3 p-3 bg-white/50 rounded-lg hover:bg-white hover:shadow-sm transition-all">
-                          <div className="w-32 font-semibold text-gray-800 bg-gray-100 px-3 py-1 rounded text-xs tracking-wide flex-shrink-0">
-                            {key}
-                          </div>
-                          <div className="text-gray-700 flex-1">
-                            {value}
-                          </div>
-                        </div>
-                      ))}
+                    <div className="mb-6 p-4 bg-white/50 rounded-lg border hover:shadow-sm transition-all">
+                      <p className="text-sm leading-relaxed text-gray-700">
+                        {Object.values(req.description).join(' ')}
+                      </p>
                     </div>
 
                     {/* File input */}
