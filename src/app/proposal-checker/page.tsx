@@ -64,12 +64,13 @@ export default function ProposalCheckerPage() {
 
   //phase-3 state
   const [submitting, setSubmitting] = useState(false);
-  const [apiResult, setApiResult] = useState<{
-    docId: string;
-    documentName: string;
-    documentUrl: string;
-    pdfUrl: string;
-  } | null>(null);
+  // const [apiResult, setApiResult] = useState<{
+  //   docId: string;
+  //   documentName: string;
+  //   documentUrl: string;
+  //   pdfUrl: string;
+  // } | null>(null);
+  const [apiResult, setApiResult] = useState<any>(null);
 
   // -------- load table data --------
   useEffect(() => {
@@ -215,6 +216,54 @@ export default function ProposalCheckerPage() {
     }
   };
 
+  //pooling
+  const subscribeToProposal = (jobId: string) => {
+    console.log("📡 Subscribing for jobId:", jobId);
+
+    const channel = supabase
+      .channel(`proposal-status-${jobId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'proposal_documents',
+        },
+        (payload) => {
+          const updated = payload.new as any;
+
+          const cleanSessionId = updated.session_id?.replace(/^=/, "");
+
+          if (cleanSessionId !== jobId) {
+            console.log("⛔ Session mismatch", cleanSessionId, jobId);
+            return;
+          }
+
+          if (updated.status === 'completed') {
+            setSubmitting(false);
+            setApiResult(updated);
+          }
+
+
+          if (updated.status === 'failed') {
+            console.log("❌ Proposal failed");
+
+            setSubmitting(false);
+            alert(updated.error_message || "Proposal failed");
+
+            supabase.removeChannel(channel);
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("Realtime connection:", status);
+      });
+  };
+
+  useEffect(() => {
+    console.log("apiResult changed:", apiResult);
+  }, [apiResult]);
+
 
 
   //Phase 3
@@ -224,98 +273,108 @@ export default function ProposalCheckerPage() {
       return;
     }
 
-    setSubmitting(true);
-    setApiResult(null);
+    try {
+      setSubmitting(true);
+      setApiResult(null);
 
-    // Build extract_document array
-    const extract_document: { title: string; result: string }[] = [];
+      const extract_document: { title: string; result: string }[] = [];
 
-    for (const req of requirements) {
-      const file = files[req.id];
-      if (!file) {
-        if (req.required) {
-          // required but missing → block submit
-          alert(`Required file missing: ${req.name}`);
-          throw new Error(`Missing required file ${req.name}`);
+      for (const req of requirements) {
+        const file = files[req.id];
+
+        if (!file) {
+          if (req.required) {
+            alert(`Required file missing: ${req.name}`);
+            throw new Error(`Missing required file ${req.name}`);
+          }
+          continue;
         }
-        continue; // optional and not uploaded
-      }
 
-      setFileStatuses(prev => ({
-        ...prev,
-        [req.id]: `Uploading & extracting: ${file.name}...`,
-      }));
-
-      // 1) Call per-file extract API (FormData)
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const extractRes = await fetch(
-        "https://kewo.app.n8n.cloud/webhook/ocr-test",
-        {
-          method: "POST",
-          body: formData, // do NOT set Content-Type
-        }
-      );
-      console.log(extractRes)
-
-      if (!extractRes.ok) {
-        const txt = await extractRes.text();
-        console.error(`❌ Extract failed for ${req.name}:`, txt);
         setFileStatuses(prev => ({
           ...prev,
-          [req.id]: `❌ Extract failed (${extractRes.status})`,
+          [req.id]: `Uploading & extracting: ${file.name}...`,
         }));
-        throw new Error(`Extract API error ${extractRes.status}`);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const extractRes = await fetch(
+          "https://kewo.app.n8n.cloud/webhook/ocr-test",
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+        if (!extractRes.ok) {
+          const txt = await extractRes.text();
+          setFileStatuses(prev => ({
+            ...prev,
+            [req.id]: `❌ Extract failed (${extractRes.status})`,
+          }));
+          throw new Error(txt);
+        }
+
+        const extractJson: { fullText: string }[] = await extractRes.json();
+        const fullText = extractJson[0]?.fullText || "";
+
+        setFileStatuses(prev => ({
+          ...prev,
+          [req.id]: `✅ Extracted: ${file.name}`,
+        }));
+
+        extract_document.push({
+          title: req.name,
+          result: fullText,
+        });
       }
 
-      const extractJson: { fullText: string }[] = await extractRes.json();
-      const fullText = extractJson[0]?.fullText || "";
+      const payload = {
+        sessionId: selectedSession.session_id,
+        folderNumber: String(selectedSession.folder_number),
+        extract_document,
+      };
 
-      setFileStatuses(prev => ({
-        ...prev,
-        [req.id]: `✅ Extracted: ${file.name}`,
-      }));
-
-      extract_document.push({
-        title: req.name,
-        result: fullText,
-      });
-    }
-
-    const payload = {
-      sessionId: selectedSession.session_id,
-      folderNumber: String(selectedSession.folder_number),
-      extract_document,
-    };
-
-    console.log(payload)
-
-    try {
-      const res = await fetch("https://kewo.app.n8n.cloud/webhook/proposal-maker", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const responseData = await res.json(); // Now safe - returns JSON
-      console.log("✅ API Response:", responseData);
+      const res = await fetch(
+        "https://kewo.app.n8n.cloud/webhook/proposal-maker",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
 
       if (!res.ok) {
-        alert(`❌ Error ${res.status}: ${JSON.stringify(responseData)}`);
-        return;
+        const errorText = await res.text();
+        throw new Error(errorText);
       }
 
-      // Store result for buttons
-      setApiResult(responseData);
-      alert("✅ Proposal generated!");
+      const responseData: any = await res.json();
+
+      // Handle array or object response safely
+      const firstItem = Array.isArray(responseData)
+        ? responseData[0]
+        : responseData;
+
+      const jobId: string | undefined = firstItem?.jobId;
+
+      if (!jobId) {
+        throw new Error("No jobId returned from server.");
+      }
+
+      console.log("Job started:", jobId);
+
+      // Start realtime listener
+      subscribeToProposal(jobId);
+
     } catch (error: any) {
-      console.error("❌ Phase 3 error:", error);
-      alert("❌ Network error: " + error.message);
-    } finally {
-      setLoading(false); // Reset loading
+      console.error("Submit error:", error);
+      alert("❌ Error: " + error.message);
+      setSubmitting(false);
     }
   };
+
+
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -671,32 +730,45 @@ export default function ProposalCheckerPage() {
                   className={`px-8 py-3 rounded-xl text-lg font-semibold shadow-lg transition-all flex-1 sm:flex-none ... ${submitting ? "opacity-75 cursor-wait" : ""}`}
                 >
                   {submitting
-                    ? "⏳ Extracting PDFs..."
+                    ? "⏳ Generating Proposal..."
                     : `✅ Submit ${requirements.length} Documents`
                   }
                 </button>
               </div>
             </div>
 
+            {submitting && !apiResult && (
+              <div className="p-6 border-t bg-gradient-to-r from-yellow-50 to-amber-50">
+                <div className="flex items-center gap-3 text-amber-800 font-semibold">
+                  ⏳ Generating proposal...
+                </div>
+                <p className="text-sm text-amber-700 mt-2">
+                  This may take several minutes. You can wait here while we prepare your document.
+                </p>
+              </div>
+            )}
+
             {/* Success buttons - show after API response */}
             {apiResult && (
               <div className="p-6 border-t bg-gradient-to-r from-green-50 to-emerald-50">
                 <h4 className="font-bold text-lg mb-4 text-green-800 flex items-center gap-2">
-                  ✅ Proposal Generated: {apiResult.documentName}
+                  ✅ Proposal Generated: {apiResult.document_name}
                 </h4>
+
                 <div className="flex flex-col sm:flex-row gap-4">
                   <a
-                    href={apiResult.documentUrl}
+                    href={apiResult.document_url?.replace(/^=/, "")}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex-1 bg-white border-2 border-green-300 hover:border-green-400 text-green-800 px-6 py-3 rounded-xl font-semibold hover:shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
                   >
                     📝 Open Document
                   </a>
+
                   <a
-                    href={apiResult.pdfUrl}
+                    href={apiResult.pdf_url?.replace(/^=/, "")}
                     target="_blank"
-                    download={apiResult.documentName + ".pdf"}
+                    download={(apiResult.document_name || "proposal") + ".pdf"}
                     className="flex-1 bg-gradient-to-r from-emerald-500 to-green-600 text-white px-6 py-3 rounded-xl font-semibold hover:from-emerald-600 hover:to-green-700 shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
                   >
                     ⬇️ Download PDF
