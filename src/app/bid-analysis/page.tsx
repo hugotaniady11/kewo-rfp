@@ -39,6 +39,13 @@ export default function BidAnalysisPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [documentData, setDocumentData] = useState<any | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [apiResult, setApiResult] = useState<any>(null);
+
+  //Give recommendation
+  const [file, setFile] = useState<File | null>(null);
+  const [open, setOpen] = useState(false);
+
   const router = useRouter();
 
   // 🔁 Polling Hook
@@ -154,6 +161,78 @@ export default function BidAnalysisPage() {
       </div>
     );
   }
+
+  //submit recommendation
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file || !sessionId) {
+      alert("Missing file or session.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setApiResult(null);
+    setStatusText("Extracting text...");
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      // 1) Extract text from file
+      const extractRes = await fetch(
+        "https://kewo.app.n8n.cloud/webhook/ocr-test",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!extractRes.ok) {
+        const txt = await extractRes.text();
+        console.error("Extract failed", extractRes.status, txt);
+        alert(`Extract failed (${extractRes.status})`);
+        return;
+      }
+
+      const extractJson: { fullText: string }[] = await extractRes.json();
+      const fullText = extractJson[0]?.fullText || "";
+
+      // 2) Call proposal-maker with extracted text
+      const payload = {
+        sessionId,
+        folderNumber: String(folderNumber),
+        extract_document: fullText,
+      };
+
+      const res = await fetch(
+        "https://kewo.app.n8n.cloud/webhook/Go/NoGoRecommendations",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText);
+      }
+
+      const responseData: any = await res.json();
+      const firstItem = Array.isArray(responseData) ? responseData[0] : responseData;
+
+      // Store full result (handles both immediate & job responses)
+      setApiResult(firstItem);
+      console.log("Analysis result:", firstItem);
+    } catch (err) {
+      console.error("Extract error", err);
+      alert("Something went wrong while extracting text");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-800">
@@ -395,12 +474,86 @@ export default function BidAnalysisPage() {
               </div>
 
               <div>
-                <button
+                {/* <button
                   onClick={() => window.open("/proposal-checker", "_blank")}
                   className="rounded bg-orange-500 px-6 py-2 text-white hover:bg-orange-600"
                 >
                   📝 Draft Proposal Maker
+                </button> */}
+
+                <button
+                  onClick={() => setOpen(true)}
+                  className="rounded bg-orange-500 px-6 py-2 text-white hover:bg-orange-600"
+                >
+                  Give Recommendation
                 </button>
+
+                {open && (
+                  <form onSubmit={handleSubmit} className="mt-4 space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Upload proposal <span className="text-red-500">*</span>
+                      </label>
+
+                      <input
+                        type="file"
+                        required
+                        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                        accept=".pdf,.doc,.docx,.txt"
+                        disabled={isSubmitting}
+                        className="block w-full cursor-pointer rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-blue-600 file:px-3 file:py-1 file:text-sm file:font-semibold file:text-white hover:file:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                    </div>
+
+                    {file && (
+                      <p className="text-xs text-gray-600">
+                        Selected file: <span className="font-medium">{file.name}</span>
+                      </p>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFile(null);
+                          setApiResult(null);
+                          setOpen(false);
+                        }}
+                        disabled={isSubmitting}
+                        className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={!file || isSubmitting}
+                        className="flex-1 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400 flex items-center justify-center gap-2"
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Processing...
+                          </>
+                        ) : (
+                          "Submit"
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Result */}
+                    {apiResult && (
+                      <div className="p-4 bg-gray-50 rounded-lg max-h-128 overflow-auto border mt-3">
+                        <h4 className="font-semibold mb-2 text-sm text-gray-900">Go/No-Go Result:</h4>
+                        <pre className="text-xs whitespace-pre-wrap bg-white p-3 rounded border font-mono text-left">
+                          {apiResult.output || JSON.stringify(apiResult, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </form>
+                )}
+
+
               </div>
             </div>
           )}
