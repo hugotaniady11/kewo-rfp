@@ -226,7 +226,7 @@ export default function BidAnalysisPage() {
       console.log("Analysis result:", firstItem);
     } catch (err) {
       console.error("Extract error", err);
-      alert("Something went wrong while extracting text");
+      alert("Something went wrong while extracting text: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setIsSubmitting(false);
     }
