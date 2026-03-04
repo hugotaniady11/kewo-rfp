@@ -396,7 +396,15 @@ export default function BidAnalysisPage() {
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                {results.map((r, i) => (
+                {results
+                  .sort((a, b) => {
+                    const aName = a.agent_name || a.agentName;
+                    const bName = b.agent_name || b.agentName;
+                    if (aName === 'ai-general-summary') return -1;
+                    if (bName === 'ai-general-summary') return 1;
+                    return 0;
+                  })
+                  .map((r, i) => (
                   <div
                     key={i}
                     className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm"
@@ -424,9 +432,9 @@ export default function BidAnalysisPage() {
                         if (typeof output === "string") {
                           try {
                             const parsed = JSON.parse(output);
-                            if (typeof parsed === "object") output = parsed;
+                            output = typeof parsed === "object" ? parsed : { content: output };
                           } catch {
-                            // leave as-is
+                            output = { content: output };
                           }
                         }
 
