@@ -46,6 +46,13 @@ export default function BidAnalysisPage() {
   const [file, setFile] = useState<File | null>(null);
   const [open, setOpen] = useState(false);
 
+  const [inputMode, setInputMode] = useState<"folder" | "upload">("folder");
+  const [files, setFiles] = useState<File[]>([]);
+  const [fileError, setFileError] = useState("");
+
+  const [extractedText, setExtractedText] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
   const router = useRouter();
 
   // 🔁 Polling Hook
@@ -67,12 +74,21 @@ export default function BidAnalysisPage() {
   // 🚀 Start Analysis
   const handleStart = async () => {
     if (isRunning) return;
+
     if (selectedFlows.length === 0) {
       alert("Please select at least one workflow");
       return;
     }
 
-    const newSessionId = `webapp-sess-${Math.random().toString(36).substring(2, 9)}`;
+    if (inputMode === "upload" && files.length === 0) {
+      alert("Please upload at least 1 PDF");
+      return;
+    }
+
+    const newSessionId = `webapp-sess-${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+
     setSessionId(newSessionId);
     setProgress(10);
     setStatusText("Initializing workflows...");
@@ -80,12 +96,26 @@ export default function BidAnalysisPage() {
     setResults([]);
 
     try {
+      let finalText = extractedText;
+
+      // 🔥 ONLY call OCR if not already done
+      if (inputMode === "upload" && !extractedText) {
+        finalText = await handleUploadBulk();
+
+        if (!finalText) {
+          alert("Failed to extract text from PDFs");
+          setIsRunning(false);
+          return;
+        }
+      }
+
+      // 🔥 Directly go to workflows (your requirement)
       for (const flowId of selectedFlows) {
         const webhook = WEBHOOK_CONFIGS.find((w) => w.id === flowId);
         if (!webhook) continue;
 
         const formData = new FormData();
-        formData.append("folderNumber", String(folderNumber));
+
         formData.append("sessionId", newSessionId);
         formData.append("workflowName", webhook.name);
         formData.append("workflowId", webhook.id);
@@ -94,7 +124,17 @@ export default function BidAnalysisPage() {
         formData.append("selectedLLM", selectedLLM);
         formData.append("llmModel", selectedLLM);
 
-        await fetch(webhook.url, { method: "POST", body: formData });
+        if (inputMode === "folder") {
+          formData.append("folderNumber", String(folderNumber));
+        } else {
+          formData.append("extractedText", finalText || "");
+        }
+
+        // ✅ ALWAYS only this gets called after ready
+        await fetch(webhook.url, {
+          method: "POST",
+          body: formData,
+        });
       }
 
       setProgress(20);
@@ -232,6 +272,46 @@ export default function BidAnalysisPage() {
     }
   };
 
+  //upload bulk document
+  const handleUploadBulk = async () => {
+    try {
+      setIsUploading(true);
+      setStatusText("Uploading & extracting text from PDFs...");
+
+      const formData = new FormData();
+
+      files.forEach((file) => {
+        formData.append("files", file);
+      });
+
+      const res = await fetch(
+        "https://kewo.app.n8n.cloud/webhook/ocr-multiple",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const data = await res.json();
+      console.log("OCR response:", data);
+
+      if (!data[0]?.combinedText) {
+        throw new Error("No text extracted");
+      }
+
+      setExtractedText(data[0].combinedText); // 🔥 cache result
+      setStatusText("PDF processed successfully ✅");
+
+      return data[0].combinedText;
+    } catch (err) {
+      console.error("❌ OCR Upload Error:", err);
+      setStatusText("Failed to process PDFs");
+      return null;
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
 
 
   return (
@@ -277,30 +357,134 @@ export default function BidAnalysisPage() {
             </p>
           </div>
 
-          {/* Folder Selector */}
+          {/* Choose input method: */}
           <div className="mb-8">
             <label className="block font-medium text-gray-700 mb-2">
-              📁 Folder Number
+              Choose Input Method
             </label>
-            <div className="flex items-center gap-4">
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={folderNumber}
-                onChange={(e) => setFolderNumber(Number(e.target.value))}
-                className="w-20 rounded border border-gray-300 px-2 py-1 text-center"
-              />
-              <input
-                type="range"
-                min={1}
-                max={20}
-                value={folderNumber}
-                onChange={(e) => setFolderNumber(Number(e.target.value))}
-                className="flex-1 accent-blue-600"
-              />
+
+            <div className="flex gap-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setInputMode("folder");
+                  setFiles([]);
+                  setFileError("");
+                }}
+                className={`px-4 py-2 rounded border ${inputMode === "folder"
+                  ? "bg-blue-600 text-white border-blue-600"
+                  : "border-gray-300"
+                  }`}
+              >
+                Folder Number
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setInputMode("upload");
+                  setFileError("");
+                }}
+                className={`px-4 py-2 rounded border ${inputMode === "upload"
+                  ? "bg-blue-600 text-white border-blue-600"
+                  : "border-gray-300"
+                  }`}
+              >
+                Upload PDF
+              </button>
             </div>
           </div>
+
+          {/* Folder Selector */}
+          {inputMode === "folder" && (
+            <div className="mb-8">
+              <label className="block font-medium text-gray-700 mb-2">
+                📁 Folder Number
+              </label>
+              <div className="flex items-center gap-4">
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={folderNumber}
+                  onChange={(e) => setFolderNumber(Number(e.target.value))}
+                  className="w-20 rounded border border-gray-300 px-2 py-1 text-center"
+                />
+                <input
+                  type="range"
+                  min={1}
+                  max={20}
+                  value={folderNumber}
+                  onChange={(e) => setFolderNumber(Number(e.target.value))}
+                  className="flex-1 accent-blue-600"
+                />
+              </div>
+            </div>
+          )}
+
+          {inputMode === "upload" && (
+            <div className="mb-8">
+              <label className="block font-medium text-gray-700 mb-2">
+                Upload PDF Files
+              </label>
+
+              <input
+                type="file"
+                accept=".pdf,application/pdf"
+                multiple
+                onChange={(e) => {
+                  const selectedFiles = Array.from(e.target.files || []);
+                  setFileError("");
+
+                  if (selectedFiles.length > 3) {
+                    setFileError("You can upload a maximum of 3 PDF files at once.");
+                    e.target.value = "";
+                    setFiles([]);
+                    return;
+                  }
+
+                  const invalidFile = selectedFiles.find(
+                    (file) =>
+                      file.type !== "application/pdf" &&
+                      !file.name.toLowerCase().endsWith(".pdf")
+                  );
+
+                  if (invalidFile) {
+                    setFileError("Only PDF files are allowed.");
+                    e.target.value = "";
+                    setFiles([]);
+                    return;
+                  }
+
+                  setFiles(selectedFiles);
+                }}
+                className="w-full rounded border border-gray-300 px-3 py-2"
+              />
+
+              <p className="mt-2 text-sm text-gray-500">
+                You can upload up to 3 PDF files at the same time.
+              </p>
+
+              {fileError && (
+                <p className="mt-2 text-sm text-red-600">{fileError}</p>
+              )}
+
+              {files.length > 0 && (
+                <div className="mt-3 rounded border border-gray-200 p-3">
+                  <p className="mb-2 text-sm font-medium text-gray-700">
+                    Selected files:
+                  </p>
+                  <ul className="space-y-1 text-sm text-gray-600">
+                    {files.map((file, index) => (
+                      <li key={`${file.name}-${index}`}>
+                        {index + 1}. {file.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Workflow Selection */}
           <div className="mb-8">
@@ -405,48 +589,48 @@ export default function BidAnalysisPage() {
                     return 0;
                   })
                   .map((r, i) => (
-                  <div
-                    key={i}
-                    className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm"
-                  >
-                    <div className="flex justify-between items-center mb-1">
-                      <h4 className="text-lg font-semibold text-blue-700">
-                        🤖 {r.agent_name || r.agentName}
-                      </h4>
-                      <span className="text-xs text-gray-500">
-                        ⏱ {r.processing_time ?? r.processingTime ?? 0}s
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mb-3">
-                      Completed at{" "}
-                      {new Date(r.updated_at || r.completedAt).toLocaleTimeString()}
-                    </p>
+                    <div
+                      key={i}
+                      className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm"
+                    >
+                      <div className="flex justify-between items-center mb-1">
+                        <h4 className="text-lg font-semibold text-blue-700">
+                          🤖 {r.agent_name || r.agentName}
+                        </h4>
+                        <span className="text-xs text-gray-500">
+                          ⏱ {r.processing_time ?? r.processingTime ?? 0}s
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-3">
+                        Completed at{" "}
+                        {new Date(r.updated_at || r.completedAt).toLocaleTimeString()}
+                      </p>
 
-                    <div className="text-sm text-gray-800 space-y-3">
-                      {(() => {
-                        let output =
-                          typeof r.result === "string"
-                            ? r.result
-                            : r.result?.output || r.result;
+                      <div className="text-sm text-gray-800 space-y-3">
+                        {(() => {
+                          let output =
+                            typeof r.result === "string"
+                              ? r.result
+                              : r.result?.output || r.result;
 
-                        if (typeof output === "string") {
-                          try {
-                            const parsed = JSON.parse(output);
-                            output = typeof parsed === "object" ? parsed : { content: output };
-                          } catch {
-                            output = { content: output };
+                          if (typeof output === "string") {
+                            try {
+                              const parsed = JSON.parse(output);
+                              output = typeof parsed === "object" ? parsed : { content: output };
+                            } catch {
+                              output = { content: output };
+                            }
                           }
-                        }
 
-                        return typeof output === "object" ? (
-                          <RenderObject data={output} />
-                        ) : (
-                          <p className="whitespace-pre-wrap">{String(output)}</p>
-                        );
-                      })()}
+                          return typeof output === "object" ? (
+                            <RenderObject data={output} />
+                          ) : (
+                            <p className="whitespace-pre-wrap">{String(output)}</p>
+                          );
+                        })()}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
           )}
