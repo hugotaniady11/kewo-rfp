@@ -436,8 +436,8 @@ export default function BidAnalysisPage() {
                   const selectedFiles = Array.from(e.target.files || []);
                   setFileError("");
 
-                  if (selectedFiles.length > 3) {
-                    setFileError("You can upload a maximum of 3 PDF files at once.");
+                  if (selectedFiles.length > 10) {
+                    setFileError("You can upload a maximum of 10 PDF files at once.");
                     e.target.value = "";
                     setFiles([]);
                     return;
@@ -462,7 +462,7 @@ export default function BidAnalysisPage() {
               />
 
               <p className="mt-2 text-sm text-gray-500">
-                You can upload up to 3 PDF files at the same time.
+                You can upload up to 10 PDF files at the same time.
               </p>
 
               {fileError && (
