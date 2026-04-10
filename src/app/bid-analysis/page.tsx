@@ -684,7 +684,7 @@ export default function BidAnalysisPage() {
                   <form onSubmit={handleSubmit} className="mt-4 space-y-3">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Upload proposal <span className="text-red-500">*</span>
+                        Upload company profile <span className="text-red-500">*</span>
                       </label>
 
                       <input
