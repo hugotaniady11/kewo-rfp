@@ -147,13 +147,31 @@ export default function BidAnalysisPage() {
   };
 
   const handleReset = () => {
-    setFolderNumber(1);
-    setSelectedLLM("gpt-4.1-mini");
-    setResults([]);
-    setDocumentData(null);
+    // stop process
+    setIsRunning(false);
+    setSessionId(null); // 🔥 VERY IMPORTANT (stops polling)
+
+    // reset core UI
     setProgress(0);
     setStatusText("Ready to start analysis...");
-    setIsRunning(false);
+    setResults([]);
+    setDocumentData(null);
+
+    // reset inputs
+    setInputMode("folder");
+    setFolderNumber(1);
+    setFiles([]);
+    setExtractedText("");
+
+    // reset selections
+    // setSelectedFlows([]);
+    setSelectedLLM("gpt-4.1-mini");
+
+    // reset misc
+    setFileError("");
+    setOpen(false);
+    setFile(null);
+    setApiResult(null);
   };
 
   const handleLogout = async () => {
@@ -521,6 +539,16 @@ export default function BidAnalysisPage() {
             </div>
           </div>
 
+          {/* Reset button */}
+          <div className="flex justify-end mb-8">
+            <button
+              onClick={handleReset}
+              className="flex items-center gap-2 rounded-lg bg-red-600 px-7 py-3 text-white text-lg font-semibold hover:bg-red-700 transition shadow-md"
+            >
+              🔄 Reset
+            </button>
+          </div>
+
           {/* LLM Selection */}
           <div className="mb-8 text-center">
             <h3 className="font-semibold text-gray-800 mb-2">
@@ -548,12 +576,6 @@ export default function BidAnalysisPage() {
                 }`}
             >
               {isRunning ? "Processing..." : "Start Analysis"}
-            </button>
-            <button
-              onClick={handleReset}
-              className="rounded bg-gray-200 px-5 py-2 hover:bg-gray-300"
-            >
-              Reset
             </button>
           </div>
 
