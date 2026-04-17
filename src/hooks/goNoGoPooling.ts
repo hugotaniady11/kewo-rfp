@@ -72,16 +72,56 @@ export function useGoNoGoPolling({
         if (sessionError && sessionError.code !== "PGRST116")
           throw sessionError;
 
-        if (sessionData && sessionData.status === "completed") {
-          const documentData = {
-            docId: sessionData.metadata?.doc_id,
-            documentUrl: sessionData.metadata?.document_url,
-            documentName: sessionData.metadata?.file_name,
-          };
+        if (sessionData) {
+          // 🔥 NEW: detect OCR done
+          if (
+            sessionData.status === "ocr_analysis_done" &&
+            !completedAgents.current.has("OCR_DONE")
+          ) {
+            console.log("🔥 OCR DONE detected");
 
-          console.log("✅ Session complete, document ready:", documentData);
-          onComplete?.(sessionId, documentData);
-          stopPolling();
+            completedAgents.current.add("OCR_DONE");
+
+            onAgentResult?.({
+              sessionId,
+              agentName: "OCR_DONE",
+              result: sessionData.metadata?.extracted_text,
+              processingTime: 0,
+              characterCount: sessionData.metadata?.extracted_text?.length || 0,
+              tokenUsage: 0,
+              completedAt: sessionData.updated_at,
+            });
+          }
+
+          // 🔥 ADD THIS
+          if (
+            sessionData.status === "ai_agents_processing" &&
+            !completedAgents.current.has("AI_STARTED")
+          ) {
+            console.log("🔥 AI STARTED detected");
+
+            completedAgents.current.add("AI_STARTED");
+
+            onAgentResult?.({
+              sessionId,
+              agentName: "AI_STARTED",
+              result: null,
+              completedAt: sessionData.updated_at,
+            });
+          }
+
+          // ✅ existing logic (unchanged)
+          if (sessionData.status === "completed") {
+            const documentData = {
+              docId: sessionData.metadata?.doc_id,
+              documentUrl: sessionData.metadata?.document_url,
+              documentName: sessionData.metadata?.file_name,
+            };
+
+            console.log("✅ Session complete, document ready:", documentData);
+            onComplete?.(sessionId, documentData);
+            stopPolling();
+          }
         }
       } catch (err: any) {
         console.warn("⚠️ Polling error:", err.message);

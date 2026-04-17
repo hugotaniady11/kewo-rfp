@@ -53,16 +53,41 @@ export default function BidAnalysisPage() {
   const [extractedText, setExtractedText] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
+  const [analysisStarted, setAnalysisStarted] = useState(false);
+
   const router = useRouter();
 
   // 🔁 Polling Hook
   useGoNoGoPolling({
-    sessionId: sessionId ?? "",
-    onAgentResult: (data) => {
+    sessionId: isRunning ? sessionId ?? "" : "",
+
+    onAgentResult: async (data) => {
+      // 🔵 Upload mode trigger
+      if (data.agentName === "OCR_DONE" && !analysisStarted) {
+        setAnalysisStarted(true);
+        setStatusText("OCR done. Starting AI analysis...");
+
+        const extractedText = data.result;
+
+        if (!extractedText) return;
+
+        await startAnalysis(sessionId!, extractedText);
+        return;
+      }
+
+      // 🟢 Folder mode trigger
+      if (data.agentName === "AI_STARTED") {
+        setStatusText("AI agents are processing...");
+        setProgress(30);
+        return;
+      }
+
+      // ✅ Normal agent results
       setResults((prev) => [...prev, data]);
       setProgress((p) => Math.min(p + 10, 90));
       setStatusText(`Agent ${data.agentName} completed`);
     },
+
     onComplete: (_sid, doc) => {
       setDocumentData(doc);
       setProgress(100);
@@ -70,6 +95,78 @@ export default function BidAnalysisPage() {
       setIsRunning(false);
     },
   });
+
+  useEffect(() => {
+    if (!isRunning || !sessionId || analysisStarted) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `https://kewo.app.n8n.cloud/webhook/workflow-sessions?sessionId=${sessionId}`
+        );
+
+        const data = await res.json();
+
+        console.log("📡 Manual polling:", data);
+
+        const record = Array.isArray(data) ? data[0] : data;
+
+        if (record?.status === "ocr_analysis_done") {
+          console.log("🔥 OCR DONE → starting analysis");
+
+          setAnalysisStarted(true);
+          setStatusText("OCR done. Starting AI analysis...");
+
+          const extractedText = record?.metadata?.extracted_text;
+
+          if (!extractedText) {
+            console.error("❌ No extracted text");
+            return;
+          }
+
+          await startAnalysis(sessionId, extractedText);
+        }
+      } catch (err) {
+        console.error("❌ polling error:", err);
+      }
+    }, 3000); // every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [isRunning, sessionId, analysisStarted]);
+
+  const startAnalysis = async (sessionId: string, extractedText: string, folderNumber?: number) => {
+    try {
+      await Promise.all(
+        selectedFlows.map((flowId) => {
+          const webhook = WEBHOOK_CONFIGS.find((w) => w.id === flowId);
+          if (!webhook) return Promise.resolve();
+
+          const formData = new FormData();
+
+          formData.append("sessionId", sessionId);
+          formData.append("workflowName", webhook.name);
+          formData.append("workflowId", webhook.id);
+          formData.append("startTime", new Date().toISOString());
+          formData.append("userAgent", navigator.userAgent);
+          formData.append("folderNumber", String(folderNumber));
+          formData.append("selectedLLM", selectedLLM);
+          formData.append("llmModel", selectedLLM);
+
+          formData.append("extractedText", extractedText);
+
+          return fetch(webhook.url, {
+            method: "POST",
+            body: formData,
+          }).catch(console.error);
+        })
+      );
+
+      setProgress(30);
+      setStatusText("AI workflows started...");
+    } catch (err) {
+      console.error("❌ Analysis start failed:", err);
+    }
+  };
 
   // 🚀 Start Analysis
   const handleStart = async () => {
@@ -91,57 +188,38 @@ export default function BidAnalysisPage() {
 
     setSessionId(newSessionId);
     setProgress(10);
-    setStatusText("Initializing workflows...");
+    setStatusText("Initializing...");
     setIsRunning(true);
     setResults([]);
+    setAnalysisStarted(false); // 🔥 IMPORTANT
 
     try {
-      let finalText = extractedText;
-
-      // 🔥 ONLY call OCR if not already done
-      if (inputMode === "upload" && !extractedText) {
-        finalText = await handleUploadBulk();
-
-        if (!finalText) {
-          alert("Failed to extract text from PDFs");
-          setIsRunning(false);
-          return;
-        }
-      }
-
-      // 🔥 Directly go to workflows (your requirement)
-      for (const flowId of selectedFlows) {
-        const webhook = WEBHOOK_CONFIGS.find((w) => w.id === flowId);
-        if (!webhook) continue;
-
+      // 🔥 upload mode → start OCR
+      if (inputMode === "upload") {
         const formData = new FormData();
-
         formData.append("sessionId", newSessionId);
-        formData.append("workflowName", webhook.name);
-        formData.append("workflowId", webhook.id);
-        formData.append("startTime", new Date().toISOString());
-        formData.append("userAgent", navigator.userAgent);
-        formData.append("selectedLLM", selectedLLM);
-        formData.append("llmModel", selectedLLM);
 
-        if (inputMode === "folder") {
-          formData.append("folderNumber", String(folderNumber));
-        } else {
-          formData.append("extractedText", finalText || "");
-        }
+        files.forEach((file) => {
+          formData.append("files", file);
+        });
 
-        // ✅ ALWAYS only this gets called after ready
-        await fetch(webhook.url, {
+        await fetch("https://kewo.app.n8n.cloud/webhook/ocr-multiple", {
           method: "POST",
           body: formData,
         });
+
+        setStatusText("OCR started...");
+        setProgress(15);
       }
 
-      setProgress(20);
-      setStatusText("Workflows started. Waiting for AI results...");
+      // 🔥 folder mode → skip OCR
+      if (inputMode === "folder") {
+        setAnalysisStarted(true);
+        await startAnalysis(newSessionId, "", folderNumber);
+      }
     } catch (error: any) {
       console.error("❌ Error:", error);
-      setStatusText("Failed to start workflows.");
+      setStatusText("Failed to start process.");
       setIsRunning(false);
     }
   };
