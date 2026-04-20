@@ -148,9 +148,12 @@ export default function BidAnalysisPage() {
           formData.append("workflowId", webhook.id);
           formData.append("startTime", new Date().toISOString());
           formData.append("userAgent", navigator.userAgent);
-          formData.append("folderNumber", String(folderNumber));
           formData.append("selectedLLM", selectedLLM);
           formData.append("llmModel", selectedLLM);
+
+          if (inputMode === "folder" && folderNumber !== undefined) {
+            formData.append("folderNumber", String(folderNumber));
+          }
 
           formData.append("extractedText", extractedText);
 
